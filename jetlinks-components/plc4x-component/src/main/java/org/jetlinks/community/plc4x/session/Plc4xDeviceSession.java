@@ -4,7 +4,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.plc4x.java.api.PlcConnection;
 import org.apache.plc4x.java.api.exceptions.PlcConnectionException;
 import org.apache.plc4x.java.api.messages.PlcReadResponse;
-import org.apache.plc4x.java.api.messages.PlcWriteResponse;
 import org.apache.plc4x.java.api.types.PlcResponseCode;
 import org.jetlinks.community.plc4x.connection.Plc4xConnectionManager;
 import org.jetlinks.community.plc4x.converter.Plc4xDataConverter;
@@ -12,10 +11,12 @@ import org.jetlinks.core.message.property.ReportPropertyMessage;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import java.math.BigDecimal;
 import java.time.Duration;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -31,6 +32,7 @@ public class Plc4xDeviceSession {
     private final long timeout;
     private final Plc4xConnectionManager connectionManager;
     private final Map<String, String> propertyAddressMap;
+    private final Map<String, String> propertyTypeMap;
 
     // 缓存上次成功读取的值，用于降级
     private final Map<String, Object> cachedValues = new ConcurrentHashMap<>();
@@ -43,13 +45,15 @@ public class Plc4xDeviceSession {
                               long interval,
                               long timeout,
                               Plc4xConnectionManager connectionManager,
-                              Map<String, String> propertyAddressMap) {
+                              Map<String, String> propertyAddressMap,
+                              Map<String, String> propertyTypeMap) {
         this.deviceId = deviceId;
         this.connectionString = connectionString;
         this.interval = interval;
         this.timeout = timeout;
         this.connectionManager = connectionManager;
         this.propertyAddressMap = new ConcurrentHashMap<>(propertyAddressMap);
+        this.propertyTypeMap = new ConcurrentHashMap<>(propertyTypeMap);
     }
 
     /**
@@ -127,7 +131,7 @@ public class Plc4xDeviceSession {
                     try {
                         org.apache.plc4x.java.api.messages.PlcReadRequest.Builder builder = connection.readRequestBuilder();
                         validAddressMap.forEach((propertyId, address) -> {
-                            log.debug("Device {} adding tag: {} -> {}", deviceId, propertyId, address);
+                            //log.debug("Device {} adding tag: {} -> {}", deviceId, propertyId, address);
                             builder.addTagAddress(propertyId, address);
                         });
 
@@ -191,8 +195,15 @@ public class Plc4xDeviceSession {
                 .flatMap(connection -> {
                     try {
                         org.apache.plc4x.java.api.messages.PlcWriteRequest.Builder builder = connection.writeRequestBuilder();
-                        validAddressMap.forEach((propertyId, address) ->
-                                builder.addTagAddress(propertyId, address, properties.get(propertyId)));
+                        validAddressMap.forEach((propertyId, address) -> {
+                            Object rawValue = properties.get(propertyId);
+                            Object value = convertWriteValue(propertyId, rawValue);
+                            log.debug("Writing PLC property, deviceId={}, propertyId={}, address={}, metadataType={}, value={}, valueType={}, rawValue={}, rawValueType={}",
+                                    deviceId, propertyId, address, propertyTypeMap.get(propertyId), value,
+                                    value == null ? null : value.getClass().getName(), rawValue,
+                                    rawValue == null ? null : rawValue.getClass().getName());
+                            builder.addTagAddress(propertyId, address, value);
+                        });
 
                         org.apache.plc4x.java.api.messages.PlcWriteRequest request = builder.build();
                         return Mono.fromFuture(request.execute())
@@ -200,6 +211,8 @@ public class Plc4xDeviceSession {
                                 .flatMap(response -> {
                                     for (String propertyId : validAddressMap.keySet()) {
                                         PlcResponseCode code = response.getResponseCode(propertyId);
+                                        log.debug("PLC property write response, deviceId={}, propertyId={}, address={}, code={}",
+                                                deviceId, propertyId, validAddressMap.get(propertyId), code);
                                         if (code != PlcResponseCode.OK) {
                                             return Mono.error(new RuntimeException(
                                                     "Failed to write property: " + propertyId + ", code: " + code));
@@ -212,6 +225,321 @@ public class Plc4xDeviceSession {
                         return Mono.error(new PlcConnectionException("Failed to write properties", e));
                     }
                 });
+    }
+
+    private Object convertWriteValue(String propertyId, Object value) {
+        if (value == null) {
+            return null;
+        }
+        String type = propertyTypeMap.get(propertyId);
+        if (type == null || type.trim().isEmpty()) {
+            return value;
+        }
+
+        String normalizedType = type.toLowerCase(Locale.ROOT).trim();
+
+        // 处理数组类型
+        if (normalizedType.endsWith("[]") || normalizedType.contains("array")) {
+            return convertArrayValue(normalizedType, value);
+        }
+
+        try {
+            switch (normalizedType) {
+                // Byte types
+                case "byte":
+                case "uint8":
+                case "usint":
+                    if (value instanceof Byte) return value;
+                    return value instanceof Number
+                        ? ((Number) value).byteValue()
+                        : Byte.parseByte(value.toString().trim());
+
+                // Short types (int16)
+                case "short":
+                case "int16":
+                case "sint":
+                    if (value instanceof Short) return value;
+                    return value instanceof Number
+                        ? ((Number) value).shortValue()
+                        : Short.parseShort(value.toString().trim());
+
+                // Unsigned short (uint16/word) -> int
+                case "uint16":
+                case "word":
+                case "ushort":
+                    if (value instanceof Integer) return value;
+                    int uint16Val = value instanceof Number
+                        ? ((Number) value).intValue()
+                        : Integer.parseInt(value.toString().trim());
+                    return uint16Val & 0xFFFF; // 确保无符号范围 [0, 65535]
+
+                // Integer types (int32)
+                case "int":
+                case "integer":
+                case "int32":
+                case "dint":
+                    if (value instanceof Integer) return value;
+                    return value instanceof Number
+                        ? ((Number) value).intValue()
+                        : Integer.parseInt(value.toString().trim());
+
+                // Unsigned int (uint32/dword) -> long
+                case "uint32":
+                case "dword":
+                case "uint":
+                case "udint":
+                    if (value instanceof Long) return value;
+                    long uint32Val = value instanceof Number
+                        ? ((Number) value).longValue()
+                        : Long.parseLong(value.toString().trim());
+                    return uint32Val & 0xFFFFFFFFL; // 确保无符号范围 [0, 4294967295]
+
+                // Long types (int64)
+                case "long":
+                case "int64":
+                case "lint":
+                    if (value instanceof Long) return value;
+                    return value instanceof Number
+                        ? ((Number) value).longValue()
+                        : Long.parseLong(value.toString().trim());
+
+                // Unsigned long (uint64) -> BigInteger (实际场景中较少使用)
+                case "uint64":
+                case "lword":
+                case "ulint":
+                    if (value instanceof Long) return value;
+                    // PLC4X 通常使用 long，无法完全表示 uint64
+                    return value instanceof Number
+                        ? ((Number) value).longValue()
+                        : Long.parseUnsignedLong(value.toString().trim());
+
+                // Float types
+                case "float":
+                case "real":
+                    if (value instanceof Float) return value;
+                    return value instanceof Number
+                        ? ((Number) value).floatValue()
+                        : Float.parseFloat(value.toString().trim());
+
+                // Double types
+                case "double":
+                case "lreal":
+                    if (value instanceof Double) return value;
+                    return value instanceof Number
+                        ? ((Number) value).doubleValue()
+                        : Double.parseDouble(value.toString().trim());
+
+                // Boolean types (支持多种格式)
+                case "boolean":
+                case "bool":
+                    if (value instanceof Boolean) return value;
+                    return parseBooleanValue(value.toString().trim());
+
+                // String types
+                case "string":
+                case "str":
+                    return value.toString();
+
+                default:
+                    return value;
+            }
+        } catch (Exception e) {
+            log.warn("Failed to convert PLC write value, deviceId=, propertyId={}, metadataType={}, value={}, valueType={}",
+                    deviceId, propertyId, type, value, value.getClass().getName(), e);
+            return value;
+        }
+    }
+
+    /**
+     * Convert array values for PLC write operations.
+     * Supports: int[], float[], double[], boolean[], string[], byte[], short[], long[]
+     */
+    private Object convertArrayValue(String arrayType, Object value) {
+        // 已经是数组类型，直接返回
+        if (value.getClass().isArray()) {
+            return value;
+        }
+
+        // 集合类型转数组
+        if (value instanceof java.util.Collection) {
+            java.util.Collection<?> collection = (java.util.Collection<?>) value;
+            String elementType = extractElementType(arrayType);
+            return convertCollectionToArray(elementType, collection);
+        }
+
+        // 字符串格式 "[1,2,3]" 或 "1,2,3"
+        if (value instanceof String) {
+            String str = value.toString().trim();
+            if (str.startsWith("[") && str.endsWith("]")) {
+                str = str.substring(1, str.length() - 1);
+            }
+            String[] parts = str.split(",");
+            String elementType = extractElementType(arrayType);
+            return convertStringArrayToTypedArray(elementType, parts);
+        }
+
+        return value;
+    }
+
+    private String extractElementType(String arrayType) {
+        // "int[]" -> "int"
+        // "integer array" -> "integer"
+        if (arrayType.endsWith("[]")) {
+            return arrayType.substring(0, arrayType.length() - 2).trim();
+        }
+        if (arrayType.contains("array")) {
+            return arrayType.replace("array", "").trim();
+        }
+        return "string";
+    }
+
+    private Object convertCollectionToArray(String elementType, java.util.Collection<?> collection) {
+        String normalized = elementType.toLowerCase(Locale.ROOT);
+        switch (normalized) {
+            case "int":
+            case "integer":
+            case "int32":
+            case "dint":
+                return collection.stream()
+                    .map(v -> v instanceof Number ? ((Number) v).intValue() : Integer.parseInt(v.toString().trim()))
+                    .toArray(Integer[]::new);
+
+            case "float":
+            case "real":
+                return collection.stream()
+                    .map(v -> v instanceof Number ? ((Number) v).floatValue() : Float.parseFloat(v.toString().trim()))
+                    .toArray(Float[]::new);
+
+            case "double":
+            case "lreal":
+                return collection.stream()
+                    .map(v -> v instanceof Number ? ((Number) v).doubleValue() : Double.parseDouble(v.toString().trim()))
+                    .toArray(Double[]::new);
+
+            case "boolean":
+            case "bool":
+                return collection.stream()
+                    .map(v -> v instanceof Boolean ? (Boolean) v : parseBooleanValue(v.toString().trim()))
+                    .toArray(Boolean[]::new);
+
+            case "byte":
+            case "uint8":
+            case "usint":
+                return collection.stream()
+                    .map(v -> v instanceof Number ? ((Number) v).byteValue() : Byte.parseByte(v.toString().trim()))
+                    .toArray(Byte[]::new);
+
+            case "short":
+            case "int16":
+            case "sint":
+                return collection.stream()
+                    .map(v -> v instanceof Number ? ((Number) v).shortValue() : Short.parseShort(v.toString().trim()))
+                    .toArray(Short[]::new);
+
+            case "long":
+            case "int64":
+            case "lint":
+                return collection.stream()
+                    .map(v -> v instanceof Number ? ((Number) v).longValue() : Long.parseLong(v.toString().trim()))
+                    .toArray(Long[]::new);
+
+            default:
+                return collection.stream()
+                    .map(Object::toString)
+                    .toArray(String[]::new);
+        }
+    }
+
+    private Object convertStringArrayToTypedArray(String elementType, String[] parts) {
+        String normalized = elementType.toLowerCase(Locale.ROOT);
+        switch (normalized) {
+            case "int":
+            case "integer":
+            case "int32":
+            case "dint":
+                return java.util.Arrays.stream(parts)
+                    .map(String::trim)
+                    .map(Integer::parseInt)
+                    .toArray(Integer[]::new);
+
+            case "float":
+            case "real":
+                return java.util.Arrays.stream(parts)
+                    .map(String::trim)
+                    .map(Float::parseFloat)
+                    .toArray(Float[]::new);
+
+            case "double":
+            case "lreal":
+                return java.util.Arrays.stream(parts)
+                    .map(String::trim)
+                    .map(Double::parseDouble)
+                    .toArray(Double[]::new);
+
+            case "boolean":
+            case "bool":
+                return java.util.Arrays.stream(parts)
+                    .map(String::trim)
+                    .map(this::parseBooleanValue)
+                    .toArray(Boolean[]::new);
+
+            case "byte":
+            case "uint8":
+            case "usint":
+                return java.util.Arrays.stream(parts)
+                    .map(String::trim)
+                    .map(Byte::parseByte)
+                    .toArray(Byte[]::new);
+
+            case "short":
+            case "int16":
+            case "sint":
+                return java.util.Arrays.stream(parts)
+                    .map(String::trim)
+                    .map(Short::parseShort)
+                    .toArray(Short[]::new);
+
+            case "long":
+            case "int64":
+            case "lint":
+                return java.util.Arrays.stream(parts)
+                    .map(String::trim)
+                    .map(Long::parseLong)
+                    .toArray(Long[]::new);
+
+            default:
+                return java.util.Arrays.stream(parts)
+                    .map(String::trim)
+                    .toArray(String[]::new);
+        }
+    }
+
+    /**
+     * Parse boolean value from string, supporting multiple formats:
+     * - "true"/"false" (case-insensitive)
+     * - "1"/"0"
+     * - "yes"/"no"
+     * - "on"/"off"
+     */
+    private boolean parseBooleanValue(String str) {
+        if (str == null || str.isEmpty()) {
+            return false;
+        }
+        String normalized = str.toLowerCase(Locale.ROOT);
+        switch (normalized) {
+            case "true":
+            case "1":
+            case "yes":
+            case "on":
+                return true;
+            case "false":
+            case "0":
+            case "no":
+            case "off":
+                return false;
+            default:
+                return Boolean.parseBoolean(normalized);
+        }
     }
 
     /**

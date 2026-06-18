@@ -220,21 +220,32 @@ public class Plc4xBridgeProtocolSupportProvider implements ProtocolSupportProvid
         @Override
         public Mono<Void> onDeviceRegister(DeviceOperator operator) {
             return operator.getMetadata()
-                    .flatMap(metadata -> Flux.fromIterable(metadata.getProperties())
-                            .collectMap(
-                                    prop -> prop.getId(),
-                                    prop -> prop.getExpand("address")
-                                            .map(Object::toString)
-                                            .orElse("")
-                            ))
-                    .flatMap(addressMap -> {
+                    .flatMap(metadata -> Mono.zip(
+                            Flux.fromIterable(metadata.getProperties())
+                                    .collectMap(
+                                            prop -> prop.getId(),
+                                            prop -> prop.getExpand("address")
+                                                    .map(Object::toString)
+                                                    .orElse("")
+                                    ),
+                            Flux.fromIterable(metadata.getProperties())
+                                    .collectMap(
+                                            prop -> prop.getId(),
+                                            prop -> Optional.ofNullable(prop.getValueType())
+                                                    .map(DataType::getType)
+                                                    .orElse("")
+                                    )
+                    ))
+                    .flatMap(tuple -> {
+                        Map<String, String> addressMap = tuple.getT1();
+                        Map<String, String> typeMap = tuple.getT2();
                         return operator.getConfig("connectionString")
                                 .map(Object::toString)
                                 .switchIfEmpty(Mono.defer(() -> {
                                     log.error("Device {} has no connectionString configured in device config", operator.getDeviceId());
                                     return stopDeviceSession(operator.getDeviceId()).then(Mono.<String>empty());
                                 }))
-                                .flatMap(connectionString -> createDeviceSession(operator, connectionString, addressMap));
+                                .flatMap(connectionString -> createDeviceSession(operator, connectionString, addressMap, typeMap));
                     })
                     .onErrorResume(e -> {
                         log.error("Failed to create PLC session for device {}: {}", operator.getDeviceId(), e.getMessage(), e);
@@ -242,7 +253,10 @@ public class Plc4xBridgeProtocolSupportProvider implements ProtocolSupportProvid
                     });
         }
 
-        private Mono<Void> createDeviceSession(DeviceOperator operator, String connectionString, Map<String, String> addressMap) {
+        private Mono<Void> createDeviceSession(DeviceOperator operator,
+                                               String connectionString,
+                                               Map<String, String> addressMap,
+                                               Map<String, String> typeMap) {
             String deviceId = operator.getDeviceId();
             if (connectionString == null || connectionString.trim().isEmpty()) {
                 log.warn("Device {} has no connection string configured", operator.getDeviceId());
@@ -281,7 +295,7 @@ public class Plc4xBridgeProtocolSupportProvider implements ProtocolSupportProvid
                         String finalConnectionString = Plc4xConnectionStringUtils.withAuthentication(
                                 connectionString.trim(), username, password);
                         return replaceDeviceSession(operator, deviceId, finalConnectionString,
-                                interval, timeout, autoSubscribe, addressMap);
+                                interval, timeout, autoSubscribe, addressMap, typeMap);
                     });
         }
 
@@ -291,7 +305,8 @@ public class Plc4xBridgeProtocolSupportProvider implements ProtocolSupportProvid
                                                 long interval,
                                                 long timeout,
                                                 boolean autoSubscribe,
-                                                Map<String, String> addressMap) {
+                                                Map<String, String> addressMap,
+                                                Map<String, String> typeMap) {
             return Mono.fromRunnable(() -> {
                         Object lock = sessionLockMap.computeIfAbsent(deviceId, key -> new Object());
                         synchronized (lock) {
@@ -304,7 +319,8 @@ public class Plc4xBridgeProtocolSupportProvider implements ProtocolSupportProvid
                                     interval,
                                     timeout,
                                     connectionManager,
-                                    addressMap
+                                    addressMap,
+                                    typeMap
                             );
                             sessionMap.put(deviceId, session);
 

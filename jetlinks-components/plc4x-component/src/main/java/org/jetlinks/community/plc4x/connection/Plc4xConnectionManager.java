@@ -46,10 +46,10 @@ public class Plc4xConnectionManager {
             String protocolCode = driver.getProtocolCode();
             if (protocolCode != null && !protocolCode.isEmpty()) {
                 driverCache.put(protocolCode, driver);
-                log.info("Loaded PLC4X driver: {} (protocol: {})", driver.getProtocolName(), protocolCode);
+                //log.info("Loaded PLC4X driver: {} (protocol: {})", driver.getProtocolName(), protocolCode);
             }
         });
-        log.info("Total PLC4X drivers loaded: {}", driverCache.size());
+        //log.info("Total PLC4X drivers loaded: {}", driverCache.size());
 
         // 启动健康检查
         if (healthCheckEnabled) {
@@ -64,10 +64,10 @@ public class Plc4xConnectionManager {
                 healthCheckIntervalSeconds,
                 TimeUnit.SECONDS
             );
-            log.info("PLC4X health check enabled, interval: {}s", healthCheckIntervalSeconds);
+            //log.info("PLC4X health check enabled, interval: {}s", healthCheckIntervalSeconds);
         } else {
             this.healthCheckExecutor = null;
-            log.info("PLC4X health check disabled");
+            //log.info("PLC4X health check disabled");
         }
     }
 
@@ -91,7 +91,7 @@ public class Plc4xConnectionManager {
 
             PlcConnection existing = connectionPool.get(connectionId);
             if (existing != null && existing.isConnected()) {
-                log.debug("Reusing existing connection for: {}", connectionId);
+                //log.debug("Reusing existing connection for: {}", connectionId);
                 return Mono.just(existing);
             }
 
