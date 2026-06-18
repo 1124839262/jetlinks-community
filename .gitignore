@@ -31,3 +31,14 @@ application-local.yml
 dev/
 .DS_Store
 .java-version
+jetlinks-ui-vue/
+node_modules/
+data/
+idea/
+
+# Local IDE/runtime overrides
+/.run/JetLinksApplication.run.xml
+/jetlinks-standalone/src/main/resources/application-default.yml
+/jetlinks-ui-vue/.env.development
+/jetlinks-ui-vue/pnpm-lock.yaml
+/jetlinks-ui-vue/pnpm-workspace.yaml
