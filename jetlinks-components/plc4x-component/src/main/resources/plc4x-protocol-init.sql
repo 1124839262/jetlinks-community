@@ -1,0 +1,11 @@
+-- PLC4X protocol registration note
+--
+-- The plc4x-bridge protocol is provided by Plc4xAutoConfiguration as a
+-- Spring ProtocolSupport bean. Do not insert an active dev_protocol row with
+-- type='local' and an empty configuration here: LocalProtocolSupportLoader
+-- requires configuration.location for local protocols, so that row fails to
+-- load and can conflict with the Spring bean registration.
+--
+-- If the protocol is deployed as an uploaded/local jar instead of the Spring
+-- component, create the dev_protocol row through the platform with a valid
+-- configuration.location that points to that artifact.

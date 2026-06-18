@@ -406,6 +406,13 @@
             <artifactId>plugin-component</artifactId>
             <version>${project.version}</version>
         </dependency>
+
+        <!-- PLC4X Bridge Protocol Component -->
+        <dependency>
+            <groupId>org.jetlinks.community</groupId>
+            <artifactId>plc4x-component</artifactId>
+            <version>${project.version}</version>
+        </dependency>
     </dependencies>
 
 
