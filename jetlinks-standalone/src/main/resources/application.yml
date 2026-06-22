@@ -94,6 +94,14 @@ device:
         writer:
             time-series:
                 enabled: true #对设备数据进行持久化
+            custom-mysql:
+                enabled: false # 自定义写入MySQL样例,开启后只有设备配置customStorage=mysql才会写入
+                url: r2dbc:mysql://127.0.0.1:3306/jetlinks_custom?ssl=false&serverZoneId=Asia/Shanghai
+                username: root
+                password: ""
+                table-name: plc_property_data
+                storage-config-key: customStorage
+                storage-config-value: mysql
 
 captcha:
     enabled: false # 开启验证码

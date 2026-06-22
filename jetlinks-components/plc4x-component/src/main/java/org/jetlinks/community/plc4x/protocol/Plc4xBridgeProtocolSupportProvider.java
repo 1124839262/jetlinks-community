@@ -16,6 +16,7 @@
 package org.jetlinks.community.plc4x.protocol;
 
 import lombok.extern.slf4j.Slf4j;
+import org.jetlinks.community.PropertyConstants;
 import org.jetlinks.community.gateway.DeviceGatewayHelper;
 import org.jetlinks.community.plc4x.Plc4xProperties;
 import org.jetlinks.community.plc4x.connection.Plc4xConnectionManager;
@@ -35,10 +36,7 @@ import org.jetlinks.core.message.property.ReadPropertyMessageReply;
 import org.jetlinks.core.message.property.WritePropertyMessage;
 import org.jetlinks.core.message.property.WritePropertyMessageReply;
 import org.jetlinks.core.metadata.*;
-import org.jetlinks.core.metadata.types.BooleanType;
-import org.jetlinks.core.metadata.types.LongType;
-import org.jetlinks.core.metadata.types.PasswordType;
-import org.jetlinks.core.metadata.types.StringType;
+import org.jetlinks.core.metadata.types.*;
 import org.jetlinks.core.spi.ProtocolSupportProvider;
 import org.jetlinks.core.spi.ServiceContext;
 import org.jetlinks.supports.official.JetLinksDeviceMetadataCodec;
@@ -202,7 +200,13 @@ public class Plc4xBridgeProtocolSupportProvider implements ProtocolSupportProvid
                         new LongType())
                     .add("autoSubscribe", "自动订阅",
                         "启用后自动订阅物模型属性并定时采集数据\n禁用后需手动调用设备功能进行读写",
-                        new BooleanType()));
+                        new BooleanType())
+                     .add("customStorage", "自定义存储目标",
+                          "选择设备属性写入的自定义数据库",
+                          new EnumType()
+                              .addElement(EnumType.Element.of("none", "不写"))
+                              .addElement(EnumType.Element.of("mysql", "MySQL"))
+                              .addElement(EnumType.Element.of("sqlserver", "SQL Server"))));
         }
 
         @Nonnull
@@ -357,16 +361,23 @@ public class Plc4xBridgeProtocolSupportProvider implements ProtocolSupportProvid
                         operator.getDeviceId(), message.getProperties());
                 return Mono.empty();
             }
-            return gatewayHelper
-                    .handleDeviceMessage(
-                            message,
-                            device -> new Plc4xPlatformDeviceSession(device),
-                            session -> {
-                                // 每次上报刷新保活
-                                session.keepAlive();
-                            },
-                            () -> log.warn("Cannot report PLC data: device {} not found in registry", operator.getDeviceId())
-                    )
+            return operator
+                    .getSelfConfig(DeviceConfigKey.productId)
+                    .doOnNext(productId -> {
+                        message.addHeader(PropertyConstants.productId, productId);
+                        log.debug("Reporting PLC properties, deviceId: {}, productId: {}, properties: {}",
+                                operator.getDeviceId(), productId, message.getProperties());
+                    })
+                    .then(gatewayHelper
+                            .handleDeviceMessage(
+                                    message,
+                                    device -> new Plc4xPlatformDeviceSession(device),
+                                    session -> {
+                                        // 每次上报刷新保活
+                                        session.keepAlive();
+                                    },
+                                    () -> log.warn("Cannot report PLC data: device {} not found in registry", operator.getDeviceId())
+                            ))
                     .then();
         }
 

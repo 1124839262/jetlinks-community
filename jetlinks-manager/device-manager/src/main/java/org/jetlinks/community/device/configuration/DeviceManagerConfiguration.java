@@ -22,6 +22,7 @@ import org.jetlinks.community.device.entity.DeviceInstanceEntity;
 import org.jetlinks.community.device.function.ReactorQLDeviceSelectorBuilder;
 import org.jetlinks.community.device.function.RelationDeviceSelectorProvider;
 import org.jetlinks.community.device.message.DeviceMessageConnector;
+import org.jetlinks.community.device.message.writer.CustomMySqlDeviceMessageWriterConnector;
 import org.jetlinks.community.device.message.writer.TimeSeriesMessageWriterConnector;
 import org.jetlinks.community.device.service.data.*;
 import org.jetlinks.community.rule.engine.executor.DeviceSelectorBuilder;
@@ -46,7 +47,11 @@ import org.springframework.core.annotation.Order;
 import java.time.Duration;
 
 @Configuration
-@EnableConfigurationProperties({DeviceDataStorageProperties.class, DeviceEventProperties.class})
+@EnableConfigurationProperties({
+    DeviceDataStorageProperties.class,
+    DeviceEventProperties.class,
+    CustomMySqlDeviceMessageWriterProperties.class
+})
 public class DeviceManagerConfiguration {
 
     @Bean
@@ -74,6 +79,14 @@ public class DeviceManagerConfiguration {
     public TimeSeriesMessageWriterConnector timeSeriesMessageWriterConnector(DeviceDataService dataService,
                                                                              ThingsDataWriter writer) {
         return new TimeSeriesMessageWriterConnector(dataService,writer);
+    }
+
+    @Bean
+    @ConditionalOnProperty(prefix = "device.message.writer.custom-mysql", name = "enabled", havingValue = "true")
+    public CustomMySqlDeviceMessageWriterConnector customMySqlDeviceMessageWriterConnector(
+        DeviceRegistry registry,
+        CustomMySqlDeviceMessageWriterProperties properties) {
+        return new CustomMySqlDeviceMessageWriterConnector(registry, properties);
     }
 
     @AutoConfiguration

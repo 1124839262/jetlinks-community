@@ -554,6 +554,7 @@ public class Plc4xDeviceSession {
                         .map(properties -> {
                             ReportPropertyMessage message = new ReportPropertyMessage();
                             message.setDeviceId(deviceId);
+                            message.setTimestamp(System.currentTimeMillis());
                             message.setProperties(properties);
                             return message;
                         })

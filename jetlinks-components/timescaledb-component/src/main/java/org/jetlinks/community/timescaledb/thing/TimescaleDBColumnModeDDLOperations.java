@@ -67,6 +67,20 @@ public class TimescaleDBColumnModeDDLOperations extends ColumnModeDDLOperationsB
                                    boolean ddl) {
         metric = TimescaleDBUtils.getTableName(metric);
         RDBSchemaMetadata schema = database.getMetadata().getCurrentSchema();
+        String tableName = metric;
+        return schema
+            .getTableReactive(tableName, true)
+            .map(Optional::of)
+            .defaultIfEmpty(Optional.empty())
+            .flatMap(existed -> register0(metricType, tableName, properties, ddl, schema, existed.orElse(null)));
+    }
+
+    protected Mono<Void> register0(MetricType metricType,
+                                   String metric,
+                                   List<PropertyMetadata> properties,
+                                   boolean ddl,
+                                   RDBSchemaMetadata schema,
+                                   RDBTableMetadata existedTable) {
         RDBTableMetadata table = schema.newTable(metric);
         TableBuilder builder = database
             .ddl()
@@ -76,6 +90,20 @@ public class TimescaleDBColumnModeDDLOperations extends ColumnModeDDLOperationsB
         partitions.add(ThingsDataConstants.COLUMN_THING_ID);
         for (PropertyMetadata property : properties) {
             if (ignoreColumn.contains(property.getId())) {
+                continue;
+            }
+            if (existedTable != null
+                && existedTable
+                .getColumns()
+                .stream()
+                .filter(column -> Objects.equals(column.getName(), property.getId())
+                    || column.getName().equalsIgnoreCase(property.getId()))
+                .findFirst()
+                .map(column -> {
+                    table.addColumn(column);
+                    return true;
+                })
+                .orElse(false)) {
                 continue;
             }
             builder
