@@ -22,6 +22,7 @@ import org.jetlinks.community.plc4x.Plc4xProperties;
 import org.jetlinks.community.plc4x.connection.Plc4xConnectionManager;
 import org.jetlinks.community.plc4x.session.Plc4xDeviceSession;
 import org.jetlinks.community.plc4x.session.Plc4xPlatformDeviceSession;
+import org.jetlinks.community.plc4x.sharding.Plc4xDeviceSharding;
 import org.jetlinks.community.plc4x.util.Plc4xConnectionStringUtils;
 import org.jetlinks.core.ProtocolSupport;
 import org.jetlinks.core.device.*;
@@ -223,6 +224,14 @@ public class Plc4xBridgeProtocolSupportProvider implements ProtocolSupportProvid
 
         @Override
         public Mono<Void> onDeviceRegister(DeviceOperator operator) {
+            String deviceId = operator.getDeviceId();
+            // 分片判断：非归属节点跳过会话创建，避免多节点重复连接同一 OPC UA Server
+            if (properties.isShardingEnabled() && !properties.getAllNodeIds().isEmpty()) {
+                if (!Plc4xDeviceSharding.isOwner(deviceId, properties.getCurrentNodeId(), properties.getAllNodeIds())) {
+                    log.debug("Device {} belongs to another node, skip session creation", deviceId);
+                    return Mono.empty();
+                }
+            }
             return operator.getMetadata()
                     .flatMap(metadata -> Mono.zip(
                             Flux.fromIterable(metadata.getProperties())

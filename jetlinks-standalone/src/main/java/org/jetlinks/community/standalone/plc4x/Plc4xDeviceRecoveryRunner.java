@@ -23,6 +23,8 @@ import org.jetlinks.community.device.enums.DeviceState;
 import org.jetlinks.community.device.service.LocalDeviceInstanceService;
 import org.jetlinks.community.device.service.LocalDeviceProductService;
 import org.jetlinks.community.device.web.response.DeviceDeployResult;
+import org.jetlinks.community.plc4x.Plc4xProperties;
+import org.jetlinks.community.plc4x.sharding.Plc4xDeviceSharding;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.stereotype.Component;
@@ -54,6 +56,8 @@ public class Plc4xDeviceRecoveryRunner implements ApplicationRunner {
     private final LocalDeviceInstanceService deviceService;
 
     private final LocalDeviceProductService productService;
+
+    private final Plc4xProperties plc4xProperties;
 
     @Override
     public void run(ApplicationArguments args) {
@@ -98,12 +102,29 @@ public class Plc4xDeviceRecoveryRunner implements ApplicationRunner {
                 .fetch();
 
         return devices
+                .filter(device -> {
+                    // 分片过滤：只恢复属于当前节点的设备
+                    if (plc4xProperties.isShardingEnabled() && !plc4xProperties.getAllNodeIds().isEmpty()) {
+                        boolean isOwner = Plc4xDeviceSharding.isOwner(
+                                device.getId(),
+                                plc4xProperties.getCurrentNodeId(),
+                                plc4xProperties.getAllNodeIds());
+                        if (!isOwner) {
+                            log.debug("Device {} belongs to another node, skip recovery", device.getId());
+                            return false;
+                        }
+                    }
+                    return true;
+                })
                 .collectList()
                 .flatMap(list -> {
                     if (list.isEmpty()) {
                         return Mono.just(0L);
                     }
-                    log.info("Recovering {} PLC4X device(s) after restart...", list.size());
+                    log.info("Recovering {} PLC4X device(s) after restart (sharding: {}, node: {})...",
+                            list.size(),
+                            plc4xProperties.isShardingEnabled(),
+                            plc4xProperties.getCurrentNodeId());
                     return deviceService
                             .deploy(Flux.fromIterable(list))
                             .doOnNext(result -> {

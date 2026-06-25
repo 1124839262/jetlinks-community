@@ -583,15 +583,32 @@ public class Plc4xDeviceSession {
                                                   Collection<String> expectedTagNames,
                                                   boolean failOnError) {
         Map<String, Object> result = new LinkedHashMap<>();
+        java.util.Collection<String> responseTagNames = response.getTagNames();
         for (String tagName : expectedTagNames) {
-            PlcResponseCode code = response.getResponseCode(tagName);
-            if (code == PlcResponseCode.OK) {
-                result.put(tagName, Plc4xDataConverter.toJavaObject(response.getPlcValue(tagName)));
-            } else {
+            if (!responseTagNames.contains(tagName)) {
                 if (failOnError) {
-                    throw new IllegalStateException("Failed to read property " + tagName + ", code: " + code);
+                    throw new IllegalStateException("Tag not found in PLC response: " + tagName);
                 }
-                log.warn("Failed to read property {}: {}", tagName, code);
+                log.warn("Tag {} absent from PLC response for device {}, skipping", tagName, deviceId);
+                continue;
+            }
+            try {
+                PlcResponseCode code = response.getResponseCode(tagName);
+                if (code == PlcResponseCode.OK) {
+                    result.put(tagName, Plc4xDataConverter.toJavaObject(response.getPlcValue(tagName)));
+                } else {
+                    if (failOnError) {
+                        throw new IllegalStateException("Failed to read property " + tagName + ", code: " + code);
+                    }
+                    log.warn("Failed to read property {}: {}", tagName, code);
+                }
+            } catch (NullPointerException e) {
+                // PLC4X internal NPE when PlcTagItem is null despite tag name being in response
+                if (failOnError) {
+                    throw new IllegalStateException("Tag " + tagName + " response item is null (PLC4X internal error)", e);
+                }
+                log.warn("Tag {} has null response item in PLC response for device {}, skipping (PLC4X internal NPE)",
+                        tagName, deviceId);
             }
         }
         return result;
